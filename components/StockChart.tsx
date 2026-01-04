@@ -1,17 +1,6 @@
 
-import React, { useMemo } from 'react';
-import {
-  ComposedChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Scatter,
-  Cell,
-  ReferenceLine
-} from 'recharts';
+import React, { useEffect, useRef, useMemo } from 'react';
+import { createChart, ColorType, ISeriesApi, IChartApi, MouseEventParams } from 'lightweight-charts';
 import { PricePoint, NewsEvent } from '../types';
 
 interface StockChartProps {
@@ -21,177 +10,168 @@ interface StockChartProps {
 }
 
 const StockChart: React.FC<StockChartProps> = ({ prices, news, onEventClick }) => {
-  const chartData = useMemo(() => {
-    return prices.map((p) => {
-      const dayNews = news.filter(n => n.date === p.date);
-      const isUp = p.close >= p.open;
-      return {
-        ...p,
-        // Wick range: [low, high]
-        wick: [p.low, p.high],
-        // Body range: [open, close]
-        body: isUp ? [p.open, p.close] : [p.close, p.open],
-        color: isUp ? '#10b981' : '#f43f5e',
-        newsCount: dayNews.length > 0 ? 1 : 0,
-        newsEvents: dayNews,
-      };
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<IChartApi | null>(null);
+  const candlestickSeriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const volumeSeriesRef = useRef<ISeriesApi<'Histogram'> | null>(null);
+
+  // Candlestick data
+  const formattedData = useMemo(() => {
+    return prices.map(p => ({
+      time: p.date,
+      open: p.open,
+      high: p.high,
+      low: p.low,
+      close: p.close,
+    })).sort((a, b) => a.time.localeCompare(b.time));
+  }, [prices]);
+
+  // Volume data with dynamic coloring
+  const volumeData = useMemo(() => {
+    return prices.map(p => ({
+      time: p.date,
+      value: p.volume,
+      color: p.close >= p.open ? 'rgba(16, 185, 129, 0.5)' : 'rgba(244, 63, 94, 0.5)',
+    })).sort((a, b) => a.time.localeCompare(b.time));
+  }, [prices]);
+
+  // Markers logic
+  const markers = useMemo(() => {
+    return news.map(n => ({
+      time: n.date,
+      position: 'aboveBar' as const,
+      color: '#f59e0b',
+      shape: 'circle' as const,
+      text: 'News',
+      id: n.id,
+    })).sort((a, b) => a.time.localeCompare(b.time));
+  }, [news]);
+
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
+
+    // Initialize Chart
+    const chart = createChart(chartContainerRef.current, {
+      layout: {
+        background: { type: ColorType.Solid, color: 'transparent' },
+        textColor: '#94a3b8',
+      },
+      grid: {
+        vertLines: { color: '#1e293b' },
+        horzLines: { color: '#1e293b' },
+      },
+      width: chartContainerRef.current.clientWidth,
+      height: 500,
+      timeScale: {
+        borderColor: '#334155',
+        barSpacing: 12,
+        timeVisible: true,
+      },
+      rightPriceScale: {
+        borderColor: '#334155',
+        scaleMargins: {
+          top: 0.1,
+          bottom: 0.25, // Leave room for volume at the bottom
+        },
+      },
+      crosshair: {
+        vertLine: { labelBackgroundColor: '#0f172a' },
+        horzLine: { labelBackgroundColor: '#0f172a' },
+      },
     });
-  }, [prices, news]);
 
-  const CustomTooltip = ({ active, payload, label }: any) => {
-    if (active && payload && payload.length) {
-      const data = payload[0].payload;
-      const isUp = data.close >= data.open;
-      return (
-        <div className="bg-slate-800 border border-slate-700 p-4 rounded-lg shadow-2xl text-xs">
-          <p className="font-bold text-slate-300 mb-2 border-b border-slate-700 pb-1">{label}</p>
-          <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 font-mono">
-            <span className="text-slate-500">Mở:</span>
-            <span className="text-slate-300 text-right">{data.open.toLocaleString()}</span>
-            
-            <span className="text-slate-500">Cao:</span>
-            <span className="text-slate-300 text-right">{data.high.toLocaleString()}</span>
-            
-            <span className="text-slate-500">Thấp:</span>
-            <span className="text-slate-300 text-right">{data.low.toLocaleString()}</span>
-            
-            <span className="text-slate-500">Đóng:</span>
-            <span className={`text-right font-bold ${isUp ? 'text-emerald-400' : 'text-rose-400'}`}>
-              {data.close.toLocaleString()}
-            </span>
+    // Add Candlestick Series
+    const candlestickSeries = chart.addCandlestickSeries({
+      upColor: '#10b981',
+      downColor: '#f43f5e',
+      borderVisible: false,
+      wickUpColor: '#10b981',
+      wickDownColor: '#f43f5e',
+    });
 
-            <span className="text-slate-500 mt-1">Khối lượng:</span>
-            <span className="text-blue-400 text-right mt-1">{data.volume.toLocaleString()}</span>
-          </div>
-          
-          {data.newsEvents && data.newsEvents.length > 0 && (
-            <div className="mt-3 pt-2 border-t border-slate-700">
-              <p className="text-amber-400 text-[10px] font-black uppercase mb-1 tracking-wider">News Event:</p>
-              {data.newsEvents.map((n: NewsEvent, i: number) => (
-                <p key={i} className="text-slate-200 leading-tight mb-1 truncate max-w-[180px]">
-                  • {n.title}
-                </p>
-              ))}
-            </div>
-          )}
-        </div>
-      );
+    // Add Volume Series (Histogram)
+    const volumeSeries = chart.addHistogramSeries({
+      priceFormat: {
+        type: 'volume',
+      },
+      priceScaleId: 'volume', // Separate scale for volume overlay
+    });
+
+    // Configure volume overlay scale
+    chart.priceScale('volume').applyOptions({
+      scaleMargins: {
+        top: 0.75, // Volume occupies the bottom 25%
+        bottom: 0,
+      },
+    });
+
+    chartRef.current = chart;
+    candlestickSeriesRef.current = candlestickSeries;
+    volumeSeriesRef.current = volumeSeries;
+
+    // Handle Click on Markers
+    const handleMouseClick = (param: MouseEventParams) => {
+      if (!param.time) return;
+      
+      const clickedDate = param.time.toString();
+      const eventsOnDate = news.filter(n => n.date === clickedDate);
+      
+      if (eventsOnDate.length > 0) {
+        onEventClick(eventsOnDate[0]);
+      }
+    };
+
+    chart.subscribeClick(handleMouseClick);
+
+    // Resize Handling
+    const handleResize = () => {
+      if (chartContainerRef.current && chartRef.current) {
+        chartRef.current.applyOptions({ width: chartContainerRef.current.clientWidth });
+      }
+    };
+
+    window.addEventListener('resize', handleResize);
+
+    return () => {
+      window.removeEventListener('resize', handleResize);
+      chart.unsubscribeClick(handleMouseClick);
+      chart.remove();
+    };
+  }, [news, onEventClick]);
+
+  // Update data and markers
+  useEffect(() => {
+    if (candlestickSeriesRef.current && volumeSeriesRef.current && formattedData.length > 0) {
+      candlestickSeriesRef.current.setData(formattedData);
+      volumeSeriesRef.current.setData(volumeData);
+      candlestickSeriesRef.current.setMarkers(markers);
+      
+      if (chartRef.current) {
+        chartRef.current.timeScale().fitContent();
+      }
     }
-    return null;
-  };
+  }, [formattedData, volumeData, markers]);
 
   return (
-    <div className="w-full h-[550px] bg-slate-900/50 rounded-xl border border-slate-800 p-4 shadow-inner">
+    <div className="w-full bg-slate-900/50 rounded-xl border border-slate-800 p-4 shadow-inner">
       <div className="flex justify-between items-center mb-4 px-2">
          <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            Japanese Candlestick Chart
+            TradingView Advanced Charting (OHLC + Vol)
          </h2>
          <div className="flex gap-4 text-[10px] font-bold uppercase">
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 bg-emerald-500 rounded-sm"></span> <span className="text-slate-400">Tăng</span></div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 bg-rose-500 rounded-sm"></span> <span className="text-slate-400">Giảm</span></div>
-            <div className="flex items-center gap-1.5"><span className="w-2 h-2 bg-amber-500 rounded-full"></span> <span className="text-slate-400">Tin tức</span></div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 bg-emerald-500 rounded-sm"></span> <span className="text-slate-400">Bullish</span></div>
+            <div className="flex items-center gap-1.5"><span className="w-2 h-2 bg-rose-500 rounded-sm"></span> <span className="text-slate-400">Bearish</span></div>
+            <div className="flex items-center gap-1.5"><span className="w-4 h-4 rounded-full border border-amber-500 flex items-center justify-center text-amber-500 text-[8px]">N</span> <span className="text-slate-400">News Marker</span></div>
          </div>
       </div>
-      <ResponsiveContainer width="100%" height="90%">
-        <ComposedChart data={chartData} margin={{ top: 10, right: 10, bottom: 0, left: 10 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" vertical={false} opacity={0.5} />
-          <XAxis 
-            dataKey="date" 
-            stroke="#475569" 
-            tick={{ fontSize: 10 }}
-            tickFormatter={(val) => val.split('-').slice(1).join('/')}
-            axisLine={false}
-          />
-          <YAxis 
-            yAxisId="price"
-            orientation="right" 
-            stroke="#475569" 
-            tick={{ fontSize: 10, fontFamily: 'monospace' }} 
-            domain={['auto', 'auto']}
-            axisLine={false}
-          />
-          <YAxis 
-            yAxisId="vol"
-            orientation="left" 
-            stroke="#334155" 
-            hide
-          />
-          <Tooltip content={<CustomTooltip />} cursor={{ stroke: '#334155', strokeWidth: 1 }} />
-          
-          {/* Volume Bars at the bottom */}
-          <Bar 
-            yAxisId="vol"
-            dataKey="volume" 
-            opacity={0.15} 
-            barSize={20}
-          >
-            {chartData.map((entry, index) => (
-              <Cell key={`vol-cell-${index}`} fill={entry.color} />
-            ))}
-          </Bar>
-
-          {/* Candle Wick (Low-High) */}
-          <Bar 
-            yAxisId="price"
-            dataKey="wick" 
-            barSize={1}
-            fill="#64748b"
-          >
-            {chartData.map((entry, index) => (
-              <Cell key={`wick-cell-${index}`} fill={entry.color} />
-            ))}
-          </Bar>
-
-          {/* Candle Body (Open-Close) */}
-          <Bar 
-            yAxisId="price"
-            dataKey="body" 
-            barSize={12}
-          >
-            {chartData.map((entry, index) => (
-              <Cell key={`body-cell-${index}`} fill={entry.color} />
-            ))}
-          </Bar>
-
-          {/* News Markers Mapping */}
-          <Scatter 
-            yAxisId="price"
-            dataKey="newsCount"
-          >
-            {chartData.map((entry, index) => {
-              if (entry.newsCount > 0) {
-                return (
-                  <Cell 
-                    key={`news-scatter-${index}`} 
-                    fill="#f59e0b" 
-                    className="cursor-pointer hover:scale-125 transition-transform"
-                    onClick={() => entry.newsEvents && onEventClick(entry.newsEvents[0])}
-                    // Visual marker just above the candle high
-                    cx={index} 
-                    cy={entry.high}
-                  />
-                );
-              }
-              return null;
-            })}
-          </Scatter>
-          
-          {/* Vertical news highlights */}
-          {chartData.map((d, i) => d.newsCount > 0 ? (
-            <ReferenceLine 
-                key={`ref-${i}`} 
-                x={d.date} 
-                stroke="#f59e0b" 
-                strokeDasharray="3 3" 
-                strokeWidth={1}
-                opacity={0.3}
-                yAxisId="price"
-            />
-          ) : null)}
-
-        </ComposedChart>
-      </ResponsiveContainer>
+      
+      <div ref={chartContainerRef} className="relative w-full h-[500px]" />
+      
+      <div className="mt-2 text-[10px] text-slate-600 flex justify-between px-2">
+        <span>Scroll: Zoom • Drag: Pan • Click Marker: Analysis • Bottom: Volume Histogram</span>
+        <span className="font-mono uppercase tracking-tighter italic">Powered by Lightweight Charts™</span>
+      </div>
     </div>
   );
 };

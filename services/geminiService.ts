@@ -1,11 +1,11 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { NewsEvent, PricePoint, ImpactAnalysis } from "../types";
+import { NewsEvent, ImpactAnalysis } from "../types";
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || '' });
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 export const searchStockNews = async (symbol: string, startDate: string, endDate: string): Promise<NewsEvent[]> => {
-  const query = `Tìm tin tức chính thống về cổ phiếu ${symbol} (HOSE/HNX) từ ngày ${startDate} đến ${endDate}. Trả về danh sách các sự kiện tin tức quan trọng.`;
+  const query = `Trích xuất tin tức quan trọng có tác động đến giá cổ phiếu ${symbol} (Việt Nam) từ ngày ${startDate} đến ${endDate}. Yêu cầu tập trung vào các sự kiện doanh nghiệp, vĩ mô, hoặc báo cáo tài chính.`;
   
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
@@ -18,11 +18,11 @@ export const searchStockNews = async (symbol: string, startDate: string, endDate
         items: {
           type: Type.OBJECT,
           properties: {
-            date: { type: Type.STRING, description: "Ngày công bố tin (YYYY-MM-DD)" },
-            title: { type: Type.STRING, description: "Tiêu đề tin" },
-            source: { type: Type.STRING, description: "Nguồn tin" },
-            summary: { type: Type.STRING, description: "Tóm tắt ngắn gọn nội dung tin" },
-            url: { type: Type.STRING, description: "Link bài viết" }
+            date: { type: Type.STRING, description: "YYYY-MM-DD" },
+            title: { type: Type.STRING },
+            source: { type: Type.STRING },
+            summary: { type: Type.STRING },
+            url: { type: Type.STRING }
           },
           required: ["date", "title", "source", "summary"]
         }
@@ -37,46 +37,38 @@ export const searchStockNews = async (symbol: string, startDate: string, endDate
       id: `news-${index}-${Date.now()}`
     }));
   } catch (e) {
-    console.error("Failed to parse news response", e);
+    console.error("News extraction failed", e);
     return [];
   }
 };
 
-export const analyzeNewsImpact = async (
-  symbol: string,
-  event: NewsEvent,
-  priceData: PricePoint[]
-): Promise<ImpactAnalysis> => {
-  const prompt = `
-    Phân tích phản ứng thị trường sau tin tức cho mã cổ phiếu ${symbol}.
-    Sự kiện: ${event.title} (${event.date})
-    Dữ liệu giá gần đây: ${JSON.stringify(priceData.slice(-15))}
-    
-    Yêu cầu:
-    1. Tính biến động giá sau 1 ngày, 3 ngày, 5 ngày.
-    2. So sánh khối lượng phiên đó với trung bình 10 phiên trước.
-    3. Đưa ra quan sát trung lập.
+/**
+ * Generates a neutral market observation based strictly on quantitative metrics.
+ */
+export const generateMarketObservation = async (headline: string, impact: ImpactAnalysis): Promise<string> => {
+  const statsString = `
+    Headline: ${headline}
+    XIS Score: ${impact.xisScore}
+    Z-Max: ${impact.zMax}
+    Volume Ratio: ${impact.volRatio}
+    Range Ratio: ${impact.rangeRatio}
+    CAR [0,1]: ${(impact.returns.imm * 100).toFixed(2)}%
+    CAR [0,3]: ${(impact.returns.short * 100).toFixed(2)}%
+    CAR [0,5]: ${(impact.returns.med * 100).toFixed(2)}%
   `;
 
   const response = await ai.models.generateContent({
     model: "gemini-3-flash-preview",
-    contents: prompt,
+    contents: statsString,
     config: {
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          plus1d: { type: Type.STRING },
-          plus3d: { type: Type.STRING },
-          plus5d: { type: Type.STRING },
-          volVsAvg: { type: Type.STRING },
-          volStatus: { type: Type.STRING, enum: ["Spike", "Normal", "Low"] },
-          observation: { type: Type.STRING }
-        },
-        required: ["plus1d", "plus3d", "plus5d", "volVsAvg", "volStatus", "observation"]
-      }
+      systemInstruction: `You are a professional market commentator with a quantitative background. 
+      Generate a neutral market observation paragraph based ONLY on the provided metrics. 
+      No prediction. No investment advice. No emotional language. 
+      Clearly distinguish: Immediate reaction, Short-term follow-through, and Market hesitation or confirmation.
+      Output format: One concise paragraph (3–5 sentences) in Vietnamese. Objective tone. Data-driven explanation.`,
+      temperature: 0.1, // Low temperature for high objectivity
     }
   });
 
-  return JSON.parse(response.text || "{}");
+  return response.text || "Không thể khởi tạo bình luận thị trường.";
 };
