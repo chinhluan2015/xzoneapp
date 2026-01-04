@@ -1,0 +1,5 @@
+{
+  "name": "XZone News Map Chart",
+  "description": "Visualize the impact of real-time news on Vietnamese stock prices using Google Search grounding and OHLCV data mapping.",
+  "requestFramePermissions": []
+}
